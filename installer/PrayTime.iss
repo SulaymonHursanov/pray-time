@@ -1,7 +1,7 @@
 ﻿; Установщик «Время намаза». Собирается скриптом build.ps1 (нужен Inno Setup 6).
 
 #define AppName "Время намаза"
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.3"
 #define AppExe "PrayTime.exe"
 
 [Setup]
