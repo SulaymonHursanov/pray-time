@@ -143,4 +143,17 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 Ещё он кладёт рядом копию `dist\PrayTime-Setup.exe` без версии в названии: к релизу на GitHub
 прикладывайте оба файла — на копию ведёт ссылка «Скачать установщик» выше.
 
+## Политика подписи кода
+
+Бесплатная подпись кода — [SignPath.io](https://about.signpath.io), сертификат — [SignPath Foundation](https://signpath.org).
+
+- Авторы и рецензенты: [SulaymonHursanov](https://github.com/SulaymonHursanov)
+- Утверждение подписи: [SulaymonHursanov](https://github.com/SulaymonHursanov)
+
+Конфиденциальность: программа не передаёт никаких данных в сеть — всё считается на компьютере.
+
+## Лицензия
+
+[MIT](LICENSE)
+
 <sub>Код написан с помощью ИИ.</sub>
