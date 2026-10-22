@@ -1,5 +1,7 @@
 ﻿# Сборка: dist\PrayTime\PrayTime.exe (PyInstaller) и dist\PrayTime-Setup-*.exe (Inno Setup)
-# Запуск:  powershell -ExecutionPolicy Bypass -File build.ps1
+# Запуск:  powershell -ExecutionPolicy Bypass -File build.ps1 [-Version 1.2.3]
+# без -Version берётся версия из installer\PrayTime.iss
+param([string]$Version)
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
@@ -29,7 +31,9 @@ $iscc = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw "Не найден Inno Setup 6 (ISCC.exe). Установите: https://jrsoftware.org/isdl.php" }
 
-& $iscc installer\PrayTime.iss
+$isccArgs = @("installer\PrayTime.iss")
+if ($Version) { $isccArgs = @("/DAppVersion=$Version") + $isccArgs }
+& $iscc @isccArgs
 if ($LASTEXITCODE) { throw "ISCC завершился с ошибкой" }
 # копия без версии в названии — на неё ведёт ссылка «Скачать» в README (releases/latest/download/...)
 $setup = Get-ChildItem dist\PrayTime-Setup-*.exe | Sort-Object LastWriteTime | Select-Object -Last 1

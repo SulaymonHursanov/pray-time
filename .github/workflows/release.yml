@@ -1,0 +1,72 @@
+# Релиз по тегу: git tag -a v1.2.3 --cleanup=verbatim -F changes.md && git push origin v1.2.3
+# (--cleanup=verbatim нужен, иначе git вырежет строки на «#» — заголовки markdown)
+# Собирает установщик (build.ps1) и публикует релиз с PrayTime-Setup-1.2.3.exe и PrayTime-Setup.exe.
+# Текст релиза — сообщение аннотированного тега (markdown) + блок «Установка».
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python-окружение для сборки
+        run: |
+          python -m venv .venv-build
+          .venv-build\Scripts\python.exe -m pip install -q pyinstaller comtypes pystray pillow
+
+      - name: Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Сборка
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          .\build.ps1 -Version $version
+
+      - name: Текст релиза
+        shell: bash
+        run: |
+          tag="${{ github.ref_name }}"
+          version="${tag#v}"
+          # checkout приносит только коммит — подтягиваем сам объект тега с сообщением
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          {
+            if [ "$(git cat-file -t "$tag")" = tag ]; then
+              git tag -l --format='%(contents)' "$tag" | sed '/-----BEGIN PGP SIGNATURE-----/,$d'
+              echo
+            fi
+            cat <<EOF
+          ## Установка
+          Скачайте **PrayTime-Setup-$version.exe** ниже и запустите — она встанет поверх прежней версии, настройки сохранятся. Права администратора не нужны. \`PrayTime-Setup.exe\` — тот же установщик, без номера версии в названии: на него ведёт постоянная ссылка на последнюю версию.
+
+          Установщик не подписан: если Windows покажет «Windows защитила ваш компьютер», нажмите «Подробнее» → «Выполнить в любом случае».
+          EOF
+          } > notes.md
+          cat notes.md
+
+      - name: Публикация
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          version="${tag#v}"
+          gh release create "$tag" \
+            "dist/PrayTime-Setup-$version.exe" \
+            "dist/PrayTime-Setup.exe" \
+            --title "Время намаза $version" \
+            --notes-file notes.md
