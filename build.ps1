@@ -31,4 +31,7 @@ if (-not $iscc) { throw "Не найден Inno Setup 6 (ISCC.exe). Устано
 
 & $iscc installer\PrayTime.iss
 if ($LASTEXITCODE) { throw "ISCC завершился с ошибкой" }
-Get-ChildItem dist\PrayTime-Setup-*.exe
+# копия без версии в названии — на неё ведёт ссылка «Скачать» в README (releases/latest/download/...)
+$setup = Get-ChildItem dist\PrayTime-Setup-*.exe | Sort-Object LastWriteTime | Select-Object -Last 1
+Copy-Item $setup.FullName dist\PrayTime-Setup.exe -Force
+Get-ChildItem dist\PrayTime-Setup*.exe

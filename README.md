@@ -39,8 +39,10 @@
 
 ## Установка
 
-Скачайте `PrayTime-Setup-*.exe` из [Releases](https://github.com/SulaymonHursanov/pray-time/releases)
-и запустите. Права администратора не нужны; по умолчанию включён автозапуск вместе с Windows.
+**[⬇ Скачать установщик](https://github.com/SulaymonHursanov/pray-time/releases/latest/download/PrayTime-Setup.exe)**
+— последняя версия скачается сразу. Запустите её; новая версия ставится поверх прежней, настройки
+сохраняются. Права администратора не нужны; по умолчанию включён автозапуск вместе с Windows.
+Описание изменений и прежние версии — в [Releases](https://github.com/SulaymonHursanov/pray-time/releases).
 
 Установщик не подписан, поэтому Windows может показать «Windows защитила ваш компьютер» —
 нажмите «Подробнее» → «Выполнить в любом случае».
@@ -137,5 +139,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 Скрипт создаёт окружение `.venv-build`, собирает `dist\PrayTime\PrayTime.exe` через PyInstaller
 и установщик `dist\PrayTime-Setup-<версия>.exe`. Версия задаётся в `installer\PrayTime.iss`.
+Ещё он кладёт рядом копию `dist\PrayTime-Setup.exe` без версии в названии: к релизу на GitHub
+прикладывайте оба файла — на копию ведёт ссылка «Скачать установщик» выше.
 
 <sub>Код написан с помощью ИИ.</sub>
