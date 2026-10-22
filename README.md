@@ -53,3 +53,5 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 Скрипт создаёт окружение `.venv-build`, собирает `dist\PrayTime\PrayTime.exe` через PyInstaller
 и установщик `dist\PrayTime-Setup-<версия>.exe`. Версия задаётся в `installer\PrayTime.iss`.
+
+<sub>Закожено с помощью ИИ.</sub>
