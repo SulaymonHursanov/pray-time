@@ -6,7 +6,7 @@
 Если слева от «Пуска» места нет («Пуск» у левого края в Windows 11 или Windows 10),
 окошко стоит справа — слева от области уведомлений.
 - Левой кнопкой мыши можно подвинуть отступ от «Пуска» (запоминается в prayer_tray.json).
-- Правая кнопка — расписание на день, «Сбросить положение», «Выход».
+- Правая кнопка — расписание на день, выбор города, «Сбросить положение», «Выход».
 - За 10 минут до намаза — уведомление Windows и окошко один раз мигает зелёным.
 - Когда наступает намаз, текст 15 минут подсвечен зелёным + уведомление Windows.
 
@@ -24,16 +24,65 @@ DEBUG = "--debug" in sys.argv   # python prayer_tray.py --debug
 from datetime import date, datetime, timedelta
 
 # ======================= НАСТРОЙКИ =======================
-CITY = "Москва"
-LAT, LNG = 55.7558, 37.6173      # координаты города
-ELEVATION = 0                     # высота над уровнем моря, м
+CITY = "Москва"                   # город по умолчанию (выбирается в меню по правой кнопке)
 
-FAJR_ANGLE = 16.0                 # угол Солнца под горизонтом для Фаджра
-ISHA_ANGLE = 15.0                 # угол для Иши (16/15 — метод ДУМ РФ)
 ASR_FACTOR = 2                    # 2 = ханафитский Аср, 1 = шафиитский
 
-# Поправки в минутах, чтобы подогнать под нужную таблицу (например, moynamaz.ru)
+# Методы расчёта (подобраны по официальным таблицам, расхождение 1–2 мин):
+#   fajr, isha  — угол Солнца под горизонтом для Фаджра и Иши
+#   isha_min    — вместо угла: Иша через столько минут после Магриба
+#   elevation   — высота над уровнем моря, м (закат позже, восход раньше)
+#   offsets     — поправки в минутах
+METHODS = {
+    "ДУМ РФ": {"fajr": 16.0, "isha": 15.0},
+    # namoz-vaqti.uz (по заключению Комитета по делам религий Узбекистана)
+    "Узбекистан": {"fajr": 15.5, "isha": 15.5, "offsets": {"Магриб": 3}},
+    # ДУМ Казахстана (muftyat.kz): поправка 3 мин (в Астане — 5, см. CITIES)
+    "Казахстан": {"fajr": 15.0, "isha": 15.0,
+                  "offsets": {"Восход": -3, "Зухр": 3, "Аср": 3, "Магриб": 3}},
+    # Муфтият Кыргызстана (muftiyat.kg)
+    "Кыргызстан": {"fajr": 18.0, "isha": 16.0, "offsets": {"Аср": 2, "Магриб": 7}},
+    # Совет улемов Таджикистана (shuroiulamo.tj/ru/namaz): Магриб через 5 мин после заката,
+    # Иша через 90 мин после Магриба; высота — Душанбе
+    "Таджикистан": {"fajr": 18.0, "isha_min": 90, "elevation": 800, "offsets": {"Восход": 2, "Магриб": 5}},
+    # Управление мусульман Кавказа (официальный календарь, по operativmm.az)
+    "Азербайджан": {"fajr": 15.75, "isha": 14.75, "offsets": {"Магриб": 13}},
+}
+DEFAULT_METHOD = "ДУМ РФ"
+
+# Поправки в минутах поверх метода, чтобы подогнать под нужную таблицу (например, moynamaz.ru)
 OFFSETS = {"Фаджр": 0, "Восход": 0, "Зухр": 0, "Аср": 0, "Магриб": 0, "Иша": 0}
+
+# Города для меню: (название, широта, долгота[, метод[, замены в методе]]); None — разделитель.
+# Время показывается по часовому поясу Windows.
+CITIES = [
+    ("Москва", 55.7558, 37.6173),
+    ("Санкт-Петербург", 59.9343, 30.3351),
+    ("Казань", 55.7963, 49.1088),
+    ("Уфа", 54.7388, 55.9721),
+    ("Нижний Новгород", 56.3269, 44.0059),
+    ("Самара", 53.1959, 50.1002),
+    ("Астрахань", 46.3497, 48.0408),
+    ("Краснодар", 45.0355, 38.9753),
+    ("Ростов-на-Дону", 47.2357, 39.7015),
+    ("Махачкала", 42.9849, 47.5047),
+    ("Грозный", 43.3178, 45.6949),
+    ("Нальчик", 43.4853, 43.6071),
+    ("Владикавказ", 43.0241, 44.6814),
+    ("Екатеринбург", 56.8389, 60.6057),
+    ("Челябинск", 55.1644, 61.4368),
+    ("Тюмень", 57.1530, 65.5343),
+    ("Новосибирск", 55.0084, 82.9357),
+    None,
+    ("Ташкент", 41.2995, 69.2401, "Узбекистан"),
+    ("Самарканд", 39.6542, 66.9597, "Узбекистан"),
+    ("Бишкек", 42.8746, 74.5698, "Кыргызстан"),
+    ("Алматы", 43.2220, 76.8512, "Казахстан"),
+    ("Астана", 51.1694, 71.4491, "Казахстан",
+     {"offsets": {"Восход": -5, "Зухр": 5, "Аср": 5, "Магриб": 5}}),
+    ("Душанбе", 38.5598, 68.7870, "Таджикистан"),
+    ("Баку", 40.4093, 49.8671, "Азербайджан"),
+]
 
 UPDATE_SECONDS = 20
 
@@ -49,6 +98,17 @@ SHOW_TRAY_ICON = True  # значок в трее нужен для уведом
 # =========================================================
 
 NAMES = ["Фаджр", "Восход", "Зухр", "Аср", "Магриб", "Иша"]
+_CITIES = {c[0]: (c[1], c[2], {**METHODS[c[3] if len(c) > 3 else DEFAULT_METHOD], **(c[4] if len(c) > 4 else {})})
+           for c in CITIES if c}
+LAT, LNG, METHOD = _CITIES[CITY]  # выбранный город, меняет set_city()
+
+
+def set_city(name):
+    """Выбрать город из CITIES; неизвестное название (старый конфиг) — оставить текущий."""
+    global CITY, LAT, LNG, METHOD
+    if name in _CITIES:
+        CITY = name
+        LAT, LNG, METHOD = _CITIES[name]
 
 
 # ---------- астрономия (алгоритм PrayTimes) ----------
@@ -83,8 +143,13 @@ def _sun(jd):
     return decl, eqt
 
 
-def compute(day: date, lat=LAT, lng=LNG, tz=None):
-    """Возвращает {название: datetime} на указанный день."""
+def compute(day: date, lat=None, lng=None, tz=None, method=None):
+    """Возвращает {название: datetime} на указанный день (по умолчанию — для выбранного города)."""
+    if lat is None:
+        lat, lng = LAT, LNG
+    method = method or METHOD
+    fajr_angle = method["fajr"]
+    isha_angle = method.get("isha", 18.0)   # при isha_min угол нужен только для первого приближения
     if tz is None:
         tz = datetime.now().astimezone().utcoffset().total_seconds() / 3600
     jd = _julian(day.year, day.month, day.day) - lng / (15 * 24)
@@ -105,17 +170,17 @@ def compute(day: date, lat=LAT, lng=LNG, tz=None):
         angle = -_darccot(factor + _dtan(abs(lat - decl)))
         return angle_time(angle, t)
 
-    rise_angle = 0.833 + 0.0347 * math.sqrt(max(ELEVATION, 0))
+    rise_angle = 0.833 + 0.0347 * math.sqrt(max(method.get("elevation", 0), 0))
     t = {"Фаджр": 5, "Восход": 6, "Зухр": 12, "Аср": 13, "Магриб": 18, "Иша": 18}
     for _ in range(2):  # две итерации для точности
         p = {k: v / 24 for k, v in t.items()}
         t = {
-            "Фаджр": angle_time(FAJR_ANGLE, p["Фаджр"], ccw=True),
+            "Фаджр": angle_time(fajr_angle, p["Фаджр"], ccw=True),
             "Восход": angle_time(rise_angle, p["Восход"], ccw=True),
             "Зухр": mid_day(p["Зухр"]),
             "Аср": asr_time(ASR_FACTOR, p["Аср"]),
             "Магриб": angle_time(rise_angle, p["Магриб"]),
-            "Иша": angle_time(ISHA_ANGLE, p["Иша"]),
+            "Иша": angle_time(isha_angle, p["Иша"]),
         }
         # если угол недостижим (белые ночи) — ставим заведомо "далёкое" значение,
         # ниже его исправит правило высоких широт
@@ -129,18 +194,23 @@ def compute(day: date, lat=LAT, lng=LNG, tz=None):
 
     # правило для высоких широт ("angle based"): летом в Москве сумерки не кончаются
     night = _fix(t["Восход"] - t["Магриб"], 24)
-    fajr_portion = FAJR_ANGLE / 60 * night
-    isha_portion = ISHA_ANGLE / 60 * night
+    fajr_portion = fajr_angle / 60 * night
+    isha_portion = isha_angle / 60 * night
     if _fix(t["Восход"] - t["Фаджр"], 24) > fajr_portion:
         t["Фаджр"] = t["Восход"] - fajr_portion
     if _fix(t["Иша"] - t["Магриб"], 24) > isha_portion:
         t["Иша"] = t["Магриб"] + isha_portion
 
     start = datetime(day.year, day.month, day.day)
-    return {
-        k: start + timedelta(hours=t[k], minutes=OFFSETS.get(k, 0))
+    offsets = method.get("offsets", {})
+    res = {
+        k: start + timedelta(hours=t[k], minutes=offsets.get(k, 0) + OFFSETS.get(k, 0))
         for k in NAMES
     }
+    if "isha_min" in method:
+        res["Иша"] = res["Магриб"] + timedelta(minutes=method["isha_min"] + OFFSETS.get("Иша", 0))
+    # округляем до минуты, как в таблицах (иначе %H:%M просто отбрасывает секунды)
+    return {k: (v + timedelta(seconds=30)).replace(second=0, microsecond=0) for k, v in res.items()}
 
 
 def next_prayer(now: datetime):
@@ -299,6 +369,7 @@ def main():
     fg2 = "#404040" if light else "#c8c8c8"
 
     cfg = load_cfg()
+    set_city(cfg.get("city", CITY))
     state = {"quit": False}
     notified = set()
 
@@ -455,6 +526,15 @@ def main():
             mark = "▶ " if name == cur else "    "
             m.add_command(label=f"{mark}{name}   {tm:%H:%M}")
         m.add_separator()
+        cities = tk.Menu(m, tearoff=0)
+        city_var = tk.StringVar(m, value=CITY)
+        for c in CITIES:
+            if c is None:
+                cities.add_separator()
+            else:
+                cities.add_radiobutton(label=c[0], value=c[0], variable=city_var,
+                                       command=lambda n=c[0]: choose_city(n))
+        m.add_cascade(label="Город", menu=cities)
         m.add_command(label="Сбросить положение",
                       command=lambda: (cfg.pop("offset", None), cfg.pop("offset_right", None),
                                        save_cfg(cfg), place()))
@@ -466,6 +546,12 @@ def main():
             m.tk_popup(e.x_root, e.y_root)
         finally:
             state["menu"] = False
+
+    def choose_city(name):
+        set_city(name)
+        cfg["city"] = name
+        save_cfg(cfg)
+        refresh()
 
     for w in (root, top, bottom, catcher):
         w.bind("<ButtonPress-1>", on_press)
