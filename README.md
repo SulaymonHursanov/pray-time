@@ -1,4 +1,4 @@
-# Время намаза
+# Время намаза [⬇ Скачать установщик](https://github.com/SulaymonHursanov/pray-time/releases/latest/download/PrayTime-Setup.exe)
 
 Время ближайшего намаза текстом прямо в панели задач Windows 11, слева от кнопки «Пуск».
 
