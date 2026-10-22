@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 import methods
 
 DEFAULT_CITY = "Москва"
-ASR_FACTOR = 2                    # 2 = ханафитский Аср, 1 = шафиитский
+ASR_FACTOR = 2                    # 2 = ханафитский Аср, 1 = шафиитский (если в методе нет "asr")
 
 # Поправки в минутах поверх метода, чтобы подогнать под нужную таблицу (например, moynamaz.ru)
 OFFSETS = {"Фаджр": 0, "Восход": 0, "Зухр": 0, "Аср": 0, "Магриб": 0, "Иша": 0}
@@ -96,7 +96,7 @@ def compute(day: date, lat=None, lng=None, tz=None, method=None):
             "Фаджр": angle_time(fajr_angle, p["Фаджр"], ccw=True),
             "Восход": angle_time(rise_angle, p["Восход"], ccw=True),
             "Зухр": mid_day(p["Зухр"]),
-            "Аср": asr_time(ASR_FACTOR, p["Аср"]),
+            "Аср": asr_time(method.get("asr", ASR_FACTOR), p["Аср"]),
             "Магриб": angle_time(rise_angle, p["Магриб"]),
             "Иша": angle_time(isha_angle, p["Иша"]),
         }
@@ -148,3 +148,19 @@ def current_or_next(now, highlight_minutes):
             return "now", name, tm
     name, tm = next_prayer(now)
     return "next", name, tm
+
+
+if __name__ == "__main__":
+    # Сверка с таблицей: python prayer_calc.py Город [ГГГГ-ММ-ДД] [часовой пояс, напр. 5]
+    import sys
+    args = sys.argv[1:]
+    if not args or args[0] not in methods.CITIES:
+        sys.exit("Город не найден. Есть: " + ", ".join(methods.CITIES))
+    set_city(args[0])
+    day = date.fromisoformat(args[1]) if len(args) > 1 else date.today()
+    tz = float(args[2]) if len(args) > 2 else None   # по умолчанию — пояс Windows
+    print(f"{CITY} ({LAT}, {LNG}), метод: {METHOD}")
+    print("Дата        " + "  ".join(f"{n:>6}" for n in NAMES))
+    for i in range(7):
+        d = day + timedelta(days=i)
+        print(f"{d:%d.%m.%Y}  " + "  ".join(f"{t:%H:%M}".rjust(6) for t in compute(d, tz=tz).values()))
