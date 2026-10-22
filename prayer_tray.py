@@ -1,8 +1,8 @@
 """
 Время намаза текстом прямо в панели задач Windows 11, слева от кнопки «Пуск».
 
-Окошко встраивается в панель задач как её дочернее окно (фон прозрачный)
-и само следует за кнопкой «Пуск», когда та сдвигается.
+Окошко — отдельное окно «поверх всех» с прозрачным фоном, лежащее на панели задач;
+само следует за кнопкой «Пуск», когда та сдвигается, и прячется в полноэкранных приложениях.
 - Левой кнопкой мыши можно подвинуть отступ от «Пуска» (запоминается в prayer_tray.json).
 - Правая кнопка — расписание на день, «Сбросить положение», «Выход».
 - Когда наступает намаз, текст 15 минут подсвечен зелёным + уведомление Windows.
@@ -273,7 +273,13 @@ def main():
     GetWL, SetWL = user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
     GetWL.restype, GetWL.argtypes = ctypes.c_ssize_t, [HWND, ctypes.c_int]
     SetWL.restype, SetWL.argtypes = ctypes.c_ssize_t, [HWND, ctypes.c_int, ctypes.c_ssize_t]
-    GWL_STYLE, WS_CHILD, WS_POPUP = -16, 0x40000000, 0x80000000
+    user32.GetForegroundWindow.restype = HWND
+    user32.GetClassNameW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.ShowWindow.argtypes = [HWND, ctypes.c_int]
+    GWL_EXSTYLE = -20
+    WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_APPWINDOW = 0x00000080, 0x08000000, 0x00040000
+    HWND_TOPMOST = HWND(-1)
+    SW_HIDE = 0
     SWP_NOACTIVATE, SWP_SHOWWINDOW = 0x0010, 0x0040
 
     taskbar = user32.FindWindowW("Shell_TrayWnd", None)
@@ -325,23 +331,38 @@ def main():
     root.geometry(f"{W}x{H}+0+0")
     root.update_idletasks()
 
-    # --- встраиваем окно в панель задач ---
+    # --- окно поверх панели задач ---
+    # Дочернее окно панели задач (SetParent) новые сборки Windows 11 перекрывают своим
+    # содержимым, поэтому окно отдельное: topmost, без значка в Alt+Tab и без захвата фокуса.
     hwnd = user32.GetParent(root.winfo_id())
-    style = GetWL(hwnd, GWL_STYLE) & 0xFFFFFFFF
-    style = (style & ~WS_POPUP) | WS_CHILD
-    SetWL(hwnd, GWL_STYLE, style)
-    ctypes.windll.kernel32.SetLastError(0)
-    prev = user32.SetParent(hwnd, taskbar)
+    exstyle = GetWL(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
+    SetWL(hwnd, GWL_EXSTYLE, (exstyle | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW)
     if DEBUG:
-        print(f"taskbar={taskbar} hwnd={hwnd} size={W}x{H} SetParent->{prev} "
-              f"err={ctypes.windll.kernel32.GetLastError()}", flush=True)
+        print(f"taskbar={taskbar} hwnd={hwnd} size={W}x{H}", flush=True)
 
     watcher = StartButtonWatcher(taskbar)
     GAP = 6
 
     dbg = {"n": 0}
 
+    def fullscreen_app():
+        """Активное окно занимает весь экран (игра, видео) — панель задач скрыта."""
+        fg_hwnd = user32.GetForegroundWindow()
+        if not fg_hwnd or fg_hwnd in (taskbar, hwnd):
+            return False
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(fg_hwnd, cls, 64)
+        if cls.value in ("Progman", "WorkerW", "Shell_TrayWnd"):   # рабочий стол
+            return False
+        fr = wintypes.RECT()
+        user32.GetWindowRect(fg_hwnd, ctypes.byref(fr))
+        return (fr.left <= 0 and fr.top <= 0 and fr.right >= user32.GetSystemMetrics(0)
+                and fr.bottom >= user32.GetSystemMetrics(1))
+
     def place():
+        if fullscreen_app():
+            user32.ShowWindow(hwnd, SW_HIDE)
+            return
         r = wintypes.RECT()
         user32.GetWindowRect(taskbar, ctypes.byref(r))
         tbw, tbh = r.right - r.left, r.bottom - r.top
@@ -350,7 +371,9 @@ def main():
         x = anchor - W - cfg.get("offset", GAP)
         x = max(0, min(x, tbw - W))
         y = max(0, (tbh - H) // 2)
-        user32.SetWindowPos(hwnd, None, int(x), int(y), W, H, SWP_NOACTIVATE | SWP_SHOWWINDOW)
+        # панель задач тоже topmost и поднимается при щелчке по ней — каждый раз возвращаемся наверх
+        user32.SetWindowPos(hwnd, HWND_TOPMOST, int(r.left + x), int(r.top + y), W, H,
+                            SWP_NOACTIVATE | SWP_SHOWWINDOW)
         if DEBUG:
             dbg["n"] += 1
             if dbg["n"] % 4 == 1:
@@ -437,7 +460,7 @@ def main():
             root.destroy()
             return
         place()
-        root.after(500, tick_place)
+        root.after(250, tick_place)
 
     tick_refresh()
     tick_place()
