@@ -5,6 +5,7 @@
 само следует за кнопкой «Пуск», когда та сдвигается, и прячется в полноэкранных приложениях.
 - Левой кнопкой мыши можно подвинуть отступ от «Пуска» (запоминается в prayer_tray.json).
 - Правая кнопка — расписание на день, «Сбросить положение», «Выход».
+- За 10 минут до намаза — уведомление Windows и окошко один раз мигает зелёным.
 - Когда наступает намаз, текст 15 минут подсвечен зелёным + уведомление Windows.
 
 Установка:   pip install comtypes pystray pillow
@@ -40,6 +41,8 @@ FG = "#ffffff"         # основной текст
 FG2 = "#b8b8b8"        # вторая строка
 ACCENT = "#0e6e46"     # подсветка, когда намаз наступил
 HIGHLIGHT_MINUTES = 15
+REMIND_MINUTES = 10    # за сколько минут до намаза уведомить и один раз мигнуть (0 — выключено)
+BLINK_MS = 800         # сколько длится мигание
 SHOW_TRAY_ICON = True  # значок в трее нужен для уведомлений Windows
 # =========================================================
 
@@ -334,9 +337,23 @@ def main():
     # --- окно поверх панели задач ---
     # Дочернее окно панели задач (SetParent) новые сборки Windows 11 перекрывают своим
     # содержимым, поэтому окно отдельное: topmost, без значка в Alt+Tab и без захвата фокуса.
-    hwnd = user32.GetParent(root.winfo_id())
-    exstyle = GetWL(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
-    SetWL(hwnd, GWL_EXSTYLE, (exstyle | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW)
+    def tool_window(w):
+        h = user32.GetParent(w.winfo_id())
+        ex = GetWL(h, GWL_EXSTYLE) & 0xFFFFFFFF
+        SetWL(h, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW)
+        return h
+
+    hwnd = tool_window(root)
+
+    # Через прозрачный (-transparentcolor) фон клики проходят насквозь на панель задач.
+    # Поэтому поверх кладём почти невидимое (alpha 1%) окно того же размера — оно ловит мышь.
+    catcher = tk.Toplevel(root)
+    catcher.overrideredirect(True)
+    catcher.configure(bg="#000000")
+    catcher.attributes("-alpha", 0.01)
+    catcher.geometry(f"{W}x{H}+0+0")
+    catcher.update_idletasks()
+    chwnd = tool_window(catcher)
     if DEBUG:
         print(f"taskbar={taskbar} hwnd={hwnd} size={W}x{H}", flush=True)
 
@@ -348,7 +365,7 @@ def main():
     def fullscreen_app():
         """Активное окно занимает весь экран (игра, видео) — панель задач скрыта."""
         fg_hwnd = user32.GetForegroundWindow()
-        if not fg_hwnd or fg_hwnd in (taskbar, hwnd):
+        if not fg_hwnd or fg_hwnd in (taskbar, hwnd, chwnd):
             return False
         cls = ctypes.create_unicode_buffer(64)
         user32.GetClassNameW(fg_hwnd, cls, 64)
@@ -360,8 +377,11 @@ def main():
                 and fr.bottom >= user32.GetSystemMetrics(1))
 
     def place():
+        if state.get("menu"):
+            return
         if fullscreen_app():
             user32.ShowWindow(hwnd, SW_HIDE)
+            user32.ShowWindow(chwnd, SW_HIDE)
             return
         r = wintypes.RECT()
         user32.GetWindowRect(taskbar, ctypes.byref(r))
@@ -372,8 +392,9 @@ def main():
         x = max(0, min(x, tbw - W))
         y = max(0, (tbh - H) // 2)
         # панель задач тоже topmost и поднимается при щелчке по ней — каждый раз возвращаемся наверх
-        user32.SetWindowPos(hwnd, HWND_TOPMOST, int(r.left + x), int(r.top + y), W, H,
-                            SWP_NOACTIVATE | SWP_SHOWWINDOW)
+        for h in (hwnd, chwnd):   # ловушка мыши — последней, то есть над надписью
+            user32.SetWindowPos(h, HWND_TOPMOST, int(r.left + x), int(r.top + y), W, H,
+                                SWP_NOACTIVATE | SWP_SHOWWINDOW)
         if DEBUG:
             dbg["n"] += 1
             if dbg["n"] % 4 == 1:
@@ -406,13 +427,32 @@ def main():
         m.add_command(label="Сбросить положение",
                       command=lambda: (cfg.pop("offset", None), save_cfg(cfg), place()))
         m.add_command(label="Выход", command=lambda: state.update(quit=True))
-        m.tk_popup(e.x_root, e.y_root)
+        # пока меню открыто, place() не поднимает окошко наверх — иначе оно перекрывает меню
+        # (на Windows tk_popup возвращается только после закрытия меню)
+        state["menu"] = True
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            state["menu"] = False
 
-    for w in (root, top, bottom):
+    for w in (root, top, bottom, catcher):
         w.bind("<ButtonPress-1>", on_press)
         w.bind("<B1-Motion>", on_move)
         w.bind("<ButtonRelease-1>", on_release)
         w.bind("<Button-3>", on_menu)
+
+    def notify(text):
+        if tray:
+            try:
+                tray.notify(text, "Время намаза")
+            except Exception:
+                pass
+
+    def blink():
+        root.config(bg=ACCENT)
+        top.config(bg=ACCENT, fg="#ffffff")
+        bottom.config(bg=ACCENT, fg="#ffffff")
+        root.after(BLINK_MS, refresh)   # refresh вернёт обычные цвета
 
     def refresh():
         now = datetime.now()
@@ -426,11 +466,7 @@ def main():
             k = (now.date(), name)
             if k not in notified:
                 notified.add(k)
-                if tray:
-                    try:
-                        tray.notify(f"Наступило время намаза {name} ({tm:%H:%M})", "Время намаза")
-                    except Exception:
-                        pass
+                notify(f"Наступило время намаза {name} ({tm:%H:%M})")
         else:
             bg, f1, f2 = key, fg, fg2
             mins = int((tm - now).total_seconds() // 60) + 1
@@ -439,6 +475,12 @@ def main():
         root.config(bg=bg)
         top.config(bg=bg, fg=f1)
         bottom.config(bg=bg, fg=f2)
+        if kind == "next" and mins <= REMIND_MINUTES:
+            k = (tm.date(), name, "скоро")
+            if k not in notified:
+                notified.add(k)
+                notify(f"Через {mins} мин — {name} ({tm:%H:%M})")
+                blink()
 
     def tick_refresh():
         try:
