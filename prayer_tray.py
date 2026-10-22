@@ -3,6 +3,8 @@
 
 Окошко — отдельное окно «поверх всех» с прозрачным фоном, лежащее на панели задач;
 само следует за кнопкой «Пуск», когда та сдвигается, и прячется в полноэкранных приложениях.
+Если слева от «Пуска» места нет («Пуск» у левого края в Windows 11 или Windows 10),
+окошко стоит справа — слева от области уведомлений.
 - Левой кнопкой мыши можно подвинуть отступ от «Пуска» (запоминается в prayer_tray.json).
 - Правая кнопка — расписание на день, «Сбросить положение», «Выход».
 - За 10 минут до намаза — уведомление Windows и окошко один раз мигает зелёным.
@@ -265,6 +267,8 @@ def main():
     HWND = wintypes.HWND
     user32.FindWindowW.restype = HWND
     user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowExW.restype = HWND
+    user32.FindWindowExW.argtypes = [HWND, HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
     user32.GetParent.restype = HWND
     user32.GetParent.argtypes = [HWND]
     user32.SetParent.restype = HWND
@@ -376,6 +380,27 @@ def main():
         return (fr.left <= 0 and fr.top <= 0 and fr.right >= user32.GetSystemMetrics(0)
                 and fr.bottom >= user32.GetSystemMetrics(1))
 
+    def child_rect(cls):
+        """Прямоугольник дочернего окна панели задач (Win32) или None."""
+        h = user32.FindWindowExW(taskbar, None, cls, None)
+        if not h:
+            return None
+        cr = wintypes.RECT()
+        user32.GetWindowRect(h, ctypes.byref(cr))
+        return (cr.left, cr.top, cr.right, cr.bottom) if cr.right > cr.left else None
+
+    OLD_WINDOWS = sys.getwindowsversion().build < 22000   # Windows 10
+
+    def offset_key():
+        """Слева от «Пуска» нет места (выравнивание влево в Windows 11, Windows 10) —
+        окошко стоит справа, слева от области уведомлений. У каждого места свой отступ."""
+        r = wintypes.RECT()
+        user32.GetWindowRect(taskbar, ctypes.byref(r))
+        s = watcher.rect or child_rect("Start")   # в Windows 10 UIA «Пуск» может не найти
+        if s is None:
+            return "offset_right" if OLD_WINDOWS else "offset"
+        return "offset_right" if s[0] - r.left < W + GAP else "offset"
+
     def place():
         if state.get("menu"):
             return
@@ -386,9 +411,14 @@ def main():
         r = wintypes.RECT()
         user32.GetWindowRect(taskbar, ctypes.byref(r))
         tbw, tbh = r.right - r.left, r.bottom - r.top
-        s = watcher.rect
-        anchor = (s[0] - r.left) if s else (8 + W + GAP)   # левый край «Пуска»
-        x = anchor - W - cfg.get("offset", GAP)
+        s = watcher.rect or child_rect("Start")
+        k = offset_key()
+        if k == "offset_right":
+            tray_rect = child_rect("TrayNotifyWnd")
+            anchor = (tray_rect[0] - r.left) if tray_rect else tbw   # левый край трея
+        else:
+            anchor = (s[0] - r.left) if s else (8 + W + GAP)   # левый край «Пуска»
+        x = anchor - W - cfg.get(k, GAP)
         x = max(0, min(x, tbw - W))
         y = max(0, (tbh - H) // 2)
         # панель задач тоже topmost и поднимается при щелчке по ней — каждый раз возвращаемся наверх
@@ -398,17 +428,18 @@ def main():
         if DEBUG:
             dbg["n"] += 1
             if dbg["n"] % 4 == 1:
-                print(f"taskbar=({r.left},{r.top},{r.right},{r.bottom}) start={s} -> x={x} y={y}",
+                print(f"taskbar=({r.left},{r.top},{r.right},{r.bottom}) start={s} {k} -> x={x} y={y}",
                       flush=True)
 
-    # --- перетаскивание: меняет отступ от «Пуска» ---
+    # --- перетаскивание: меняет отступ от «Пуска» (или от трея) ---
     drag = {}
 
     def on_press(e):
-        drag["mx"], drag["off"] = e.x_root, cfg.get("offset", GAP)
+        drag["key"] = offset_key()
+        drag["mx"], drag["off"] = e.x_root, cfg.get(drag["key"], GAP)
 
     def on_move(e):
-        cfg["offset"] = drag["off"] - (e.x_root - drag["mx"])
+        cfg[drag["key"]] = drag["off"] - (e.x_root - drag["mx"])
         place()
 
     def on_release(e):
@@ -425,7 +456,8 @@ def main():
             m.add_command(label=f"{mark}{name}   {tm:%H:%M}")
         m.add_separator()
         m.add_command(label="Сбросить положение",
-                      command=lambda: (cfg.pop("offset", None), save_cfg(cfg), place()))
+                      command=lambda: (cfg.pop("offset", None), cfg.pop("offset_right", None),
+                                       save_cfg(cfg), place()))
         m.add_command(label="Выход", command=lambda: state.update(quit=True))
         # пока меню открыто, place() не поднимает окошко наверх — иначе оно перекрывает меню
         # (на Windows tk_popup возвращается только после закрытия меню)
