@@ -10,216 +10,36 @@
 - За 10 минут до намаза — уведомление Windows и окошко один раз мигает зелёным.
 - Когда наступает намаз, текст 15 минут подсвечен зелёным + уведомление Windows.
 
+Файлы:       prayer_calc.py — расчёт времени, methods/ — методы и города по странам,
+             win_utils.py — работа с Windows.
 Установка:   pip install comtypes pystray pillow
              (comtypes — чтобы находить «Пуск», pystray+pillow — для уведомлений)
 Запуск:      pythonw prayer_tray.py
 """
 
 import json
-import math
 import os
 import sys
+from datetime import datetime
+
+import prayer_calc
+import win_utils as win
+from prayer_calc import compute, current_or_next
 
 DEBUG = "--debug" in sys.argv   # python prayer_tray.py --debug
-from datetime import date, datetime, timedelta
 
 # ======================= НАСТРОЙКИ =======================
-CITY = "Москва"                   # город по умолчанию (выбирается в меню по правой кнопке)
-
-ASR_FACTOR = 2                    # 2 = ханафитский Аср, 1 = шафиитский
-
-# Методы расчёта (подобраны по официальным таблицам, расхождение 1–2 мин):
-#   fajr, isha  — угол Солнца под горизонтом для Фаджра и Иши
-#   isha_min    — вместо угла: Иша через столько минут после Магриба
-#   elevation   — высота над уровнем моря, м (закат позже, восход раньше)
-#   offsets     — поправки в минутах
-METHODS = {
-    "ДУМ РФ": {"fajr": 16.0, "isha": 15.0},
-    # namoz-vaqti.uz (по заключению Комитета по делам религий Узбекистана)
-    "Узбекистан": {"fajr": 15.5, "isha": 15.5, "offsets": {"Магриб": 3}},
-    # ДУМ Казахстана (muftyat.kz): поправка 3 мин (в Астане — 5, см. CITIES)
-    "Казахстан": {"fajr": 15.0, "isha": 15.0,
-                  "offsets": {"Восход": -3, "Зухр": 3, "Аср": 3, "Магриб": 3}},
-    # Муфтият Кыргызстана (muftiyat.kg)
-    "Кыргызстан": {"fajr": 18.0, "isha": 16.0, "offsets": {"Аср": 2, "Магриб": 7}},
-    # Совет улемов Таджикистана (shuroiulamo.tj/ru/namaz): Магриб через 5 мин после заката,
-    # Иша через 90 мин после Магриба; высота — Душанбе
-    "Таджикистан": {"fajr": 18.0, "isha_min": 90, "elevation": 800, "offsets": {"Восход": 2, "Магриб": 5}},
-    # Управление мусульман Кавказа (официальный календарь, по operativmm.az)
-    "Азербайджан": {"fajr": 15.75, "isha": 14.75, "offsets": {"Магриб": 13}},
-}
-DEFAULT_METHOD = "ДУМ РФ"
-
-# Поправки в минутах поверх метода, чтобы подогнать под нужную таблицу (например, moynamaz.ru)
-OFFSETS = {"Фаджр": 0, "Восход": 0, "Зухр": 0, "Аср": 0, "Магриб": 0, "Иша": 0}
-
-# Города для меню: (название, широта, долгота[, метод[, замены в методе]]); None — разделитель.
-# Время показывается по часовому поясу Windows.
-CITIES = [
-    ("Москва", 55.7558, 37.6173),
-    ("Санкт-Петербург", 59.9343, 30.3351),
-    ("Казань", 55.7963, 49.1088),
-    ("Уфа", 54.7388, 55.9721),
-    ("Нижний Новгород", 56.3269, 44.0059),
-    ("Самара", 53.1959, 50.1002),
-    ("Астрахань", 46.3497, 48.0408),
-    ("Краснодар", 45.0355, 38.9753),
-    ("Ростов-на-Дону", 47.2357, 39.7015),
-    ("Махачкала", 42.9849, 47.5047),
-    ("Грозный", 43.3178, 45.6949),
-    ("Нальчик", 43.4853, 43.6071),
-    ("Владикавказ", 43.0241, 44.6814),
-    ("Екатеринбург", 56.8389, 60.6057),
-    ("Челябинск", 55.1644, 61.4368),
-    ("Тюмень", 57.1530, 65.5343),
-    ("Новосибирск", 55.0084, 82.9357),
-    None,
-    ("Ташкент", 41.2995, 69.2401, "Узбекистан"),
-    ("Самарканд", 39.6542, 66.9597, "Узбекистан"),
-    ("Бишкек", 42.8746, 74.5698, "Кыргызстан"),
-    ("Алматы", 43.2220, 76.8512, "Казахстан"),
-    ("Астана", 51.1694, 71.4491, "Казахстан",
-     {"offsets": {"Восход": -5, "Зухр": 5, "Аср": 5, "Магриб": 5}}),
-    ("Душанбе", 38.5598, 68.7870, "Таджикистан"),
-    ("Баку", 40.4093, 49.8671, "Азербайджан"),
-]
+# Город и метод расчёта выбираются в меню; список городов — в methods/, остальное — в prayer_calc.py
 
 UPDATE_SECONDS = 20
 
 # Вид окошка
-BG = "#1c1c1c"         # фон (под тёмную панель задач Windows 11)
-FG = "#ffffff"         # основной текст
-FG2 = "#b8b8b8"        # вторая строка
 ACCENT = "#0e6e46"     # подсветка, когда намаз наступил
 HIGHLIGHT_MINUTES = 15
 REMIND_MINUTES = 10    # за сколько минут до намаза уведомить и один раз мигнуть (0 — выключено)
 BLINK_MS = 800         # сколько длится мигание
 SHOW_TRAY_ICON = True  # значок в трее нужен для уведомлений Windows
 # =========================================================
-
-NAMES = ["Фаджр", "Восход", "Зухр", "Аср", "Магриб", "Иша"]
-_CITIES = {c[0]: (c[1], c[2], {**METHODS[c[3] if len(c) > 3 else DEFAULT_METHOD], **(c[4] if len(c) > 4 else {})})
-           for c in CITIES if c}
-LAT, LNG, METHOD = _CITIES[CITY]  # выбранный город, меняет set_city()
-
-
-def set_city(name):
-    """Выбрать город из CITIES; неизвестное название (старый конфиг) — оставить текущий."""
-    global CITY, LAT, LNG, METHOD
-    if name in _CITIES:
-        CITY = name
-        LAT, LNG, METHOD = _CITIES[name]
-
-
-# ---------- астрономия (алгоритм PrayTimes) ----------
-def _dsin(d): return math.sin(math.radians(d))
-def _dcos(d): return math.cos(math.radians(d))
-def _dtan(d): return math.tan(math.radians(d))
-def _darcsin(x): return math.degrees(math.asin(x))
-def _darccos(x): return math.degrees(math.acos(x))
-def _darctan2(y, x): return math.degrees(math.atan2(y, x))
-def _darccot(x): return math.degrees(math.atan(1 / x))
-def _fix(a, b): return a - b * math.floor(a / b)
-
-
-def _julian(y, m, d):
-    if m <= 2:
-        y -= 1
-        m += 12
-    a = math.floor(y / 100)
-    b = 2 - a + math.floor(a / 4)
-    return math.floor(365.25 * (y + 4716)) + math.floor(30.6001 * (m + 1)) + d + b - 1524.5
-
-
-def _sun(jd):
-    d = jd - 2451545.0
-    g = _fix(357.529 + 0.98560028 * d, 360)
-    q = _fix(280.459 + 0.98564736 * d, 360)
-    l = _fix(q + 1.915 * _dsin(g) + 0.020 * _dsin(2 * g), 360)
-    e = 23.439 - 0.00000036 * d
-    ra = _darctan2(_dcos(e) * _dsin(l), _dcos(l)) / 15
-    eqt = q / 15 - _fix(ra, 24)
-    decl = _darcsin(_dsin(e) * _dsin(l))
-    return decl, eqt
-
-
-def compute(day: date, lat=None, lng=None, tz=None, method=None):
-    """Возвращает {название: datetime} на указанный день (по умолчанию — для выбранного города)."""
-    if lat is None:
-        lat, lng = LAT, LNG
-    method = method or METHOD
-    fajr_angle = method["fajr"]
-    isha_angle = method.get("isha", 18.0)   # при isha_min угол нужен только для первого приближения
-    if tz is None:
-        tz = datetime.now().astimezone().utcoffset().total_seconds() / 3600
-    jd = _julian(day.year, day.month, day.day) - lng / (15 * 24)
-
-    def mid_day(t):
-        return _fix(12 - _sun(jd + t)[1], 24)
-
-    def angle_time(angle, t, ccw=False):
-        decl = _sun(jd + t)[0]
-        x = (-_dsin(angle) - _dsin(decl) * _dsin(lat)) / (_dcos(decl) * _dcos(lat))
-        if x < -1 or x > 1:
-            return float("nan")          # Солнце не достигает этого угла (белые ночи)
-        t_ = _darccos(x) / 15
-        return mid_day(t) + (-t_ if ccw else t_)
-
-    def asr_time(factor, t):
-        decl = _sun(jd + t)[0]
-        angle = -_darccot(factor + _dtan(abs(lat - decl)))
-        return angle_time(angle, t)
-
-    rise_angle = 0.833 + 0.0347 * math.sqrt(max(method.get("elevation", 0), 0))
-    t = {"Фаджр": 5, "Восход": 6, "Зухр": 12, "Аср": 13, "Магриб": 18, "Иша": 18}
-    for _ in range(2):  # две итерации для точности
-        p = {k: v / 24 for k, v in t.items()}
-        t = {
-            "Фаджр": angle_time(fajr_angle, p["Фаджр"], ccw=True),
-            "Восход": angle_time(rise_angle, p["Восход"], ccw=True),
-            "Зухр": mid_day(p["Зухр"]),
-            "Аср": asr_time(ASR_FACTOR, p["Аср"]),
-            "Магриб": angle_time(rise_angle, p["Магриб"]),
-            "Иша": angle_time(isha_angle, p["Иша"]),
-        }
-        # если угол недостижим (белые ночи) — ставим заведомо "далёкое" значение,
-        # ниже его исправит правило высоких широт
-        if math.isnan(t["Фаджр"]):
-            t["Фаджр"] = t["Восход"] - 12
-        if math.isnan(t["Иша"]):
-            t["Иша"] = t["Магриб"] + 12
-
-    # перевод из местного солнечного времени в часовой пояс
-    t = {k: v + tz - lng / 15 for k, v in t.items()}
-
-    # правило для высоких широт ("angle based"): летом в Москве сумерки не кончаются
-    night = _fix(t["Восход"] - t["Магриб"], 24)
-    fajr_portion = fajr_angle / 60 * night
-    isha_portion = isha_angle / 60 * night
-    if _fix(t["Восход"] - t["Фаджр"], 24) > fajr_portion:
-        t["Фаджр"] = t["Восход"] - fajr_portion
-    if _fix(t["Иша"] - t["Магриб"], 24) > isha_portion:
-        t["Иша"] = t["Магриб"] + isha_portion
-
-    start = datetime(day.year, day.month, day.day)
-    offsets = method.get("offsets", {})
-    res = {
-        k: start + timedelta(hours=t[k], minutes=offsets.get(k, 0) + OFFSETS.get(k, 0))
-        for k in NAMES
-    }
-    if "isha_min" in method:
-        res["Иша"] = res["Магриб"] + timedelta(minutes=method["isha_min"] + OFFSETS.get("Иша", 0))
-    # округляем до минуты, как в таблицах (иначе %H:%M просто отбрасывает секунды)
-    return {k: (v + timedelta(seconds=30)).replace(second=0, microsecond=0) for k, v in res.items()}
-
-
-def next_prayer(now: datetime):
-    """(название, время) ближайшего намаза; Восход пропускаем."""
-    for d in (now.date(), now.date() + timedelta(days=1)):
-        for name, tm in compute(d).items():
-            if name != "Восход" and tm > now:
-                return name, tm
-    return None, None
 
 
 # ---------- окошко на панели задач ----------
@@ -252,124 +72,25 @@ def save_cfg(cfg):
         pass
 
 
-def current_or_next(now):
-    """('now', имя, время) если намаз наступил недавно, иначе ('next', имя, время)."""
-    for name, tm in compute(now.date()).items():
-        if name != "Восход" and tm <= now < tm + timedelta(minutes=HIGHLIGHT_MINUTES):
-            return "now", name, tm
-    name, tm = next_prayer(now)
-    return "next", name, tm
-
-
-def is_light_theme():
-    try:
-        import winreg
-        k = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                           r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
-        return winreg.QueryValueEx(k, "SystemUsesLightTheme")[0] == 1
-    except Exception:
-        return False
-
-
-class StartButtonWatcher:
-    """В фоне следит, где сейчас кнопка «Пуск» (через UI Automation, нужен comtypes)."""
-
-    def __init__(self, taskbar_hwnd):
-        import threading
-        self.taskbar = taskbar_hwnd
-        self.rect = None
-        self.stop = False
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self):
-        import time as _t
-        try:
-            import warnings
-            warnings.filterwarnings("ignore", category=FutureWarning, module="comtypes")
-            warnings.filterwarnings("ignore", message=".*comtypes.*")
-            import comtypes
-            import comtypes.client
-            comtypes.CoInitialize()
-            comtypes.client.GetModule("UIAutomationCore.dll")
-            from comtypes.gen import UIAutomationClient as U
-            uia = comtypes.client.CreateObject(U.CUIAutomation, interface=U.IUIAutomation)
-        except Exception:
-            return  # comtypes не установлен — работаем по сохранённому положению
-        el = None
-        while not self.stop:
-            try:
-                if el is None:
-                    root_el = uia.ElementFromHandle(self.taskbar)
-                    cond = uia.CreatePropertyCondition(U.UIA_AutomationIdPropertyId, "StartButton")
-                    el = root_el.FindFirst(U.TreeScope_Descendants, cond)
-                if el:
-                    r = el.CurrentBoundingRectangle
-                    self.rect = (r.left, r.top, r.right, r.bottom) if r.right > r.left else None
-                    if self.rect is None:
-                        el = None
-            except Exception:
-                el, self.rect = None, None
-            _t.sleep(0.5)
-
-
 def main():
-    import ctypes
-    from ctypes import wintypes
     import tkinter as tk
 
-    user32 = ctypes.windll.user32
-
-    # только одна копия
-    kernel32 = ctypes.windll.kernel32
-    kernel32.CreateMutexW.restype = wintypes.HANDLE
-    _mutex = kernel32.CreateMutexW(None, False, "PrayTimeTrayMutex")
-    if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    _mutex = win.single_instance("PrayTimeTrayMutex")   # только одна копия
+    if _mutex is None:
         return
+    win.set_dpi_aware()
 
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        try:
-            user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
-    HWND = wintypes.HWND
-    user32.FindWindowW.restype = HWND
-    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-    user32.FindWindowExW.restype = HWND
-    user32.FindWindowExW.argtypes = [HWND, HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
-    user32.GetParent.restype = HWND
-    user32.GetParent.argtypes = [HWND]
-    user32.SetParent.restype = HWND
-    user32.SetParent.argtypes = [HWND, HWND]
-    user32.GetWindowRect.argtypes = [HWND, ctypes.POINTER(wintypes.RECT)]
-    user32.IsWindow.argtypes = [HWND]
-    user32.SetWindowPos.argtypes = [HWND, HWND, ctypes.c_int, ctypes.c_int,
-                                    ctypes.c_int, ctypes.c_int, ctypes.c_uint]
-    GetWL, SetWL = user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
-    GetWL.restype, GetWL.argtypes = ctypes.c_ssize_t, [HWND, ctypes.c_int]
-    SetWL.restype, SetWL.argtypes = ctypes.c_ssize_t, [HWND, ctypes.c_int, ctypes.c_ssize_t]
-    user32.GetForegroundWindow.restype = HWND
-    user32.GetClassNameW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
-    user32.ShowWindow.argtypes = [HWND, ctypes.c_int]
-    GWL_EXSTYLE = -20
-    WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_APPWINDOW = 0x00000080, 0x08000000, 0x00040000
-    HWND_TOPMOST = HWND(-1)
-    SW_HIDE = 0
-    SWP_NOACTIVATE, SWP_SHOWWINDOW = 0x0010, 0x0040
-
-    taskbar = user32.FindWindowW("Shell_TrayWnd", None)
+    taskbar = win.find_taskbar()
     if not taskbar:
         raise SystemExit("Панель задач не найдена")
 
-    light = is_light_theme()
+    light = win.is_light_theme()
     key = "#eeeeee" if light else "#202020"     # этот цвет станет прозрачным
     fg = "#000000" if light else "#ffffff"
     fg2 = "#404040" if light else "#c8c8c8"
 
     cfg = load_cfg()
-    set_city(cfg.get("city", CITY))
+    prayer_calc.set_city(cfg.get("city", prayer_calc.CITY))
     state = {"quit": False}
     notified = set()
 
@@ -412,13 +133,7 @@ def main():
     # --- окно поверх панели задач ---
     # Дочернее окно панели задач (SetParent) новые сборки Windows 11 перекрывают своим
     # содержимым, поэтому окно отдельное: topmost, без значка в Alt+Tab и без захвата фокуса.
-    def tool_window(w):
-        h = user32.GetParent(w.winfo_id())
-        ex = GetWL(h, GWL_EXSTYLE) & 0xFFFFFFFF
-        SetWL(h, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW)
-        return h
-
-    hwnd = tool_window(root)
+    hwnd = win.make_tool_window(root)
 
     # Через прозрачный (-transparentcolor) фон клики проходят насквозь на панель задач.
     # Поэтому поверх кладём почти невидимое (alpha 1%) окно того же размера — оно ловит мышь.
@@ -428,78 +143,50 @@ def main():
     catcher.attributes("-alpha", 0.01)
     catcher.geometry(f"{W}x{H}+0+0")
     catcher.update_idletasks()
-    chwnd = tool_window(catcher)
+    chwnd = win.make_tool_window(catcher)
     if DEBUG:
         print(f"taskbar={taskbar} hwnd={hwnd} size={W}x{H}", flush=True)
 
-    watcher = StartButtonWatcher(taskbar)
+    watcher = win.StartButtonWatcher(taskbar)
     GAP = 6
 
     dbg = {"n": 0}
 
-    def fullscreen_app():
-        """Активное окно занимает весь экран (игра, видео) — панель задач скрыта."""
-        fg_hwnd = user32.GetForegroundWindow()
-        if not fg_hwnd or fg_hwnd in (taskbar, hwnd, chwnd):
-            return False
-        cls = ctypes.create_unicode_buffer(64)
-        user32.GetClassNameW(fg_hwnd, cls, 64)
-        if cls.value in ("Progman", "WorkerW", "Shell_TrayWnd"):   # рабочий стол
-            return False
-        fr = wintypes.RECT()
-        user32.GetWindowRect(fg_hwnd, ctypes.byref(fr))
-        return (fr.left <= 0 and fr.top <= 0 and fr.right >= user32.GetSystemMetrics(0)
-                and fr.bottom >= user32.GetSystemMetrics(1))
-
-    def child_rect(cls):
-        """Прямоугольник дочернего окна панели задач (Win32) или None."""
-        h = user32.FindWindowExW(taskbar, None, cls, None)
-        if not h:
-            return None
-        cr = wintypes.RECT()
-        user32.GetWindowRect(h, ctypes.byref(cr))
-        return (cr.left, cr.top, cr.right, cr.bottom) if cr.right > cr.left else None
-
-    OLD_WINDOWS = sys.getwindowsversion().build < 22000   # Windows 10
-
     def offset_key():
         """Слева от «Пуска» нет места (выравнивание влево в Windows 11, Windows 10) —
         окошко стоит справа, слева от области уведомлений. У каждого места свой отступ."""
-        r = wintypes.RECT()
-        user32.GetWindowRect(taskbar, ctypes.byref(r))
-        s = watcher.rect or child_rect("Start")   # в Windows 10 UIA «Пуск» может не найти
+        left = win.window_rect(taskbar)[0]
+        s = watcher.rect or win.child_rect(taskbar, "Start")   # в Windows 10 UIA «Пуск» может не найти
         if s is None:
-            return "offset_right" if OLD_WINDOWS else "offset"
-        return "offset_right" if s[0] - r.left < W + GAP else "offset"
+            return "offset_right" if win.OLD_WINDOWS else "offset"
+        return "offset_right" if s[0] - left < W + GAP else "offset"
 
     def place():
         if state.get("menu"):
             return
-        if fullscreen_app():
-            user32.ShowWindow(hwnd, SW_HIDE)
-            user32.ShowWindow(chwnd, SW_HIDE)
+        if win.fullscreen_app(ignore=(taskbar, hwnd, chwnd)):
+            win.hide(hwnd)
+            win.hide(chwnd)
             return
-        r = wintypes.RECT()
-        user32.GetWindowRect(taskbar, ctypes.byref(r))
-        tbw, tbh = r.right - r.left, r.bottom - r.top
-        s = watcher.rect or child_rect("Start")
+        r = win.window_rect(taskbar)
+        tbw, tbh = r[2] - r[0], r[3] - r[1]
+        s = watcher.rect or win.child_rect(taskbar, "Start")
         k = offset_key()
         if k == "offset_right":
-            tray_rect = child_rect("TrayNotifyWnd")
-            anchor = (tray_rect[0] - r.left) if tray_rect else tbw   # левый край трея
+            tray_rect = win.child_rect(taskbar, "TrayNotifyWnd")
+            anchor = (tray_rect[0] - r[0]) if tray_rect else tbw   # левый край трея
         else:
-            anchor = (s[0] - r.left) if s else (8 + W + GAP)   # левый край «Пуска»
+            anchor = (s[0] - r[0]) if s else (8 + W + GAP)   # левый край «Пуска»
         x = anchor - W - cfg.get(k, GAP)
         x = max(0, min(x, tbw - W))
         y = max(0, (tbh - H) // 2)
         # панель задач тоже topmost и поднимается при щелчке по ней — каждый раз возвращаемся наверх
         for h in (hwnd, chwnd):   # ловушка мыши — последней, то есть над надписью
-            user32.SetWindowPos(h, HWND_TOPMOST, int(r.left + x), int(r.top + y), W, H,
-                                SWP_NOACTIVATE | SWP_SHOWWINDOW)
+            win.show_topmost(h, r[0] + x, r[1] + y, W, H)
         if DEBUG:
             dbg["n"] += 1
             if dbg["n"] % 4 == 1:
-                print(f"taskbar=({r.left},{r.top},{r.right},{r.bottom}) start={s} {k} -> x={x} y={y}",
+                print(f"taskbar={r} start={s} {k} -> x={x} y={y}",
                       flush=True)
 
     # --- перетаскивание: меняет отступ от «Пуска» (или от трея) ---
@@ -518,20 +205,20 @@ def main():
 
     def on_menu(e):
         now = datetime.now()
-        _, cur, _ = current_or_next(now)
+        _, cur, _ = current_or_next(now, HIGHLIGHT_MINUTES)
         m = tk.Menu(root, tearoff=0)
-        m.add_command(label=f"{CITY}, {now:%d.%m.%Y}", state="disabled")
+        m.add_command(label=f"{prayer_calc.CITY}, {now:%d.%m.%Y}", state="disabled")
         m.add_separator()
         for name, tm in compute(now.date()).items():
             mark = "▶ " if name == cur else "    "
             m.add_command(label=f"{mark}{name}   {tm:%H:%M}")
         m.add_separator()
         cities = tk.Menu(m, tearoff=0)
-        city_var = tk.StringVar(m, value=CITY)
-        for c in CITIES:
-            if c is None:
+        city_var = tk.StringVar(m, value=prayer_calc.CITY)
+        for i, country in enumerate(prayer_calc.methods.COUNTRIES):
+            if i:
                 cities.add_separator()
-            else:
+            for c in country.CITIES:
                 cities.add_radiobutton(label=c[0], value=c[0], variable=city_var,
                                        command=lambda n=c[0]: choose_city(n))
         m.add_cascade(label="Город", menu=cities)
@@ -548,7 +235,7 @@ def main():
             state["menu"] = False
 
     def choose_city(name):
-        set_city(name)
+        prayer_calc.set_city(name)
         cfg["city"] = name
         save_cfg(cfg)
         refresh()
@@ -574,7 +261,7 @@ def main():
 
     def refresh():
         now = datetime.now()
-        kind, name, tm = current_or_next(now)
+        kind, name, tm = current_or_next(now, HIGHLIGHT_MINUTES)
         top.config(text=f"{name} {tm:%H:%M}")
         if tray:
             tray.title = f"{name} в {tm:%H:%M}"
@@ -610,7 +297,7 @@ def main():
 
     def tick_place():
         # если Проводник перезапустился — панель задач новая, выходим
-        if state["quit"] or not user32.IsWindow(taskbar):
+        if state["quit"] or not win.is_window(taskbar):
             watcher.stop = True
             if tray:
                 try:
