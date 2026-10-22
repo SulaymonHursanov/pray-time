@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv*/
+venv/
+
+# сборка (PyInstaller / Inno Setup)
+build/
+dist/
+*.spec
+installer/PrayTime.ico
+
+# настройки пользователя
+prayer_tray.json
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# ОС
+Thumbs.db
+desktop.ini
