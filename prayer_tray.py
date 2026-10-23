@@ -6,11 +6,13 @@
 Если слева от «Пуска» места нет («Пуск» у левого края в Windows 11 или Windows 10),
 окошко стоит справа — слева от области уведомлений.
 - Левой кнопкой мыши можно подвинуть отступ от «Пуска» (запоминается в prayer_tray.json).
-- Правая кнопка — расписание на день, выбор города, «Сбросить положение», «Выход».
+- Правая кнопка — расписание на день, выбор города и языка названий намазов,
+  «Сбросить положение», «Выход».
 - За 10 минут до намаза — уведомление Windows и окошко один раз мигает зелёным.
 - Когда наступает намаз, текст 15 минут подсвечен зелёным + уведомление Windows.
 
 Файлы:       prayer_calc.py — расчёт времени, methods/ — методы и города по странам,
+             names.py — названия намазов на разных языках,
              win_utils.py — работа с Windows.
 Установка:   pip install comtypes pystray pillow
              (comtypes — чтобы находить «Пуск», pystray+pillow — для уведомлений)
@@ -22,6 +24,7 @@ import os
 import sys
 from datetime import datetime
 
+import names
 import prayer_calc
 import win_utils as win
 from prayer_calc import compute, current_or_next
@@ -91,6 +94,7 @@ def main():
 
     cfg = load_cfg()
     prayer_calc.set_city(cfg.get("city", prayer_calc.CITY))
+    names.set_lang(cfg.get("lang", names.DEFAULT_LANG))
     state = {"quit": False}
     notified = set()
 
@@ -211,7 +215,7 @@ def main():
         m.add_separator()
         for name, tm in compute(now.date()).items():
             mark = "▶ " if name == cur else "    "
-            m.add_command(label=f"{mark}{name}   {tm:%H:%M}")
+            m.add_command(label=f"{mark}{names.show(name)}   {tm:%H:%M}")
         m.add_separator()
         cities = tk.Menu(m, tearoff=0)
         city_var = tk.StringVar(m, value=prayer_calc.CITY)
@@ -222,6 +226,12 @@ def main():
                 cities.add_radiobutton(label=c[0], value=c[0], variable=city_var,
                                        command=lambda n=c[0]: choose_city(n))
         m.add_cascade(label="Город", menu=cities)
+        langs = tk.Menu(m, tearoff=0)
+        lang_var = tk.StringVar(m, value=names.LANG)
+        for lang in names.LANGS:
+            langs.add_radiobutton(label=lang, value=lang, variable=lang_var,
+                                  command=lambda l=lang: choose_lang(l))
+        m.add_cascade(label="Названия намазов", menu=langs)
         m.add_command(label="Сбросить положение",
                       command=lambda: (cfg.pop("offset", None), cfg.pop("offset_right", None),
                                        save_cfg(cfg), place()))
@@ -237,6 +247,12 @@ def main():
     def choose_city(name):
         prayer_calc.set_city(name)
         cfg["city"] = name
+        save_cfg(cfg)
+        refresh()
+
+    def choose_lang(lang):
+        names.set_lang(lang)
+        cfg["lang"] = lang
         save_cfg(cfg)
         refresh()
 
@@ -261,14 +277,15 @@ def main():
 
     def refresh():
         now = datetime.now()
-        kind, name, tm = current_or_next(now, HIGHLIGHT_MINUTES)
+        kind, key_name, tm = current_or_next(now, HIGHLIGHT_MINUTES)
+        name = names.show(key_name)
         top.config(text=f"{name} {tm:%H:%M}")
         if tray:
             tray.title = f"{name} в {tm:%H:%M}"
         if kind == "now":
             bg, f1, f2 = ACCENT, "#ffffff", "#ffffff"
             bottom.config(text="время наступило")
-            k = (now.date(), name)
+            k = (now.date(), key_name)
             if k not in notified:
                 notified.add(k)
                 notify(f"Наступило время намаза {name} ({tm:%H:%M})")
@@ -281,7 +298,7 @@ def main():
         top.config(bg=bg, fg=f1)
         bottom.config(bg=bg, fg=f2)
         if kind == "next" and mins <= REMIND_MINUTES:
-            k = (tm.date(), name, "скоро")
+            k = (tm.date(), key_name, "скоро")
             if k not in notified:
                 notified.add(k)
                 notify(f"Через {mins} мин — {name} ({tm:%H:%M})")
