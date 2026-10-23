@@ -3,7 +3,7 @@
 #define AppName "Время намаза"
 ; при сборке релиза версия берётся из тега: build.ps1 -Version 1.2.3 → ISCC /DAppVersion=1.2.3
 #ifndef AppVersion
-  #define AppVersion "1.0.3"
+  #define AppVersion "1.1.0"
 #endif
 #define AppExe "PrayTime.exe"
 
